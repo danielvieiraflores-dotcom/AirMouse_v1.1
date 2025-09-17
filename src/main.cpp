@@ -37,7 +37,7 @@ const int SAMPLE_HZ = 100; // Freq. amostragem alvo
 
 // ---------------- MPU-6050 ----------------
 const uint8_t MPU_ADDR         = 0x68;
-const uint8_t MPU_WHO_AM_I_EXPECTED = 0x68;
+const uint8_t MPU_WHO_AM_I_EXPECTED = 0x70; // 0x68; original
 const uint8_t REG_CONFIG       = 0x1A; // DLPF
 const uint8_t REG_GYRO_CONFIG  = 0x1B;
 const uint8_t REG_ACCEL_CONFIG = 0x1C;
