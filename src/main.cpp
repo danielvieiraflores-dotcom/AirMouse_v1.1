@@ -119,10 +119,10 @@ struct OrientationMapping {
 const OrientationMapping orientationMaps[] = {
     // HORIZONTAL (padrão - como controle remoto)
     { 1.0f,  1.0f,  1.0f, false, false, "HORIZONTAL" },
-    
+
     // VERTICAL (como smartphone em pé)
     { 1.0f,  1.0f,  1.0f, true,  false, "VERTICAL" },
-    
+
     // INVERTED (de cabeça para baixo)
     { 1.0f,  1.0f,  1.0f, true,  true,  "INVERTIDO" },
     
@@ -135,6 +135,12 @@ const OrientationMapping orientationMaps[] = {
     // UNKNOWN (usar padrão)
     { -1.0f,  1.0f,  1.0f, false, false, "DESCONHECIDA" }
 };
+
+// Parâmetros para reduzir a influência de inclinações involuntárias do punho no movimento horizontal
+const float WRIST_TILT_SUPPRESSION_GAIN      = 0.65f;  // Intensidade da redução do movimento horizontal
+const float WRIST_TILT_SUPPRESSION_MIN_SCALE = 0.35f;  // Limite mínimo para preservar algum movimento
+const float WRIST_TILT_DEADZONE              = 1.0f;   // Ignora pequenas inclinações (em dps)
+const float WRIST_TILT_EPSILON               = 0.001f; // Evita divisões por zero
 
 // ---------------- FUNÇÕES DE FILTRO AVANÇADO ----------------
 
@@ -281,16 +287,37 @@ void updateOrientation(float ax, float ay, float az) {
     }
 }
 
+// Atenua o impacto da inclinação do punho sobre o movimento horizontal
+float suppressWristTilt(float horizontalValue, float roll_movement, const OrientationMapping& map) {
+    float tilt_component = fabs(roll_movement * map.roll_factor);
+    if (tilt_component <= WRIST_TILT_DEADZONE) {
+        return horizontalValue;
+    }
+
+    tilt_component -= WRIST_TILT_DEADZONE; // remove a zona morta para pequenas inclinações
+
+    float horizontal_magnitude = fabs(horizontalValue) + WRIST_TILT_EPSILON;
+    float tilt_ratio = tilt_component / (tilt_component + horizontal_magnitude);
+
+    float suppression = 1.0f - tilt_ratio * WRIST_TILT_SUPPRESSION_GAIN;
+    suppression = constrain(suppression, WRIST_TILT_SUPPRESSION_MIN_SCALE, 1.0f);
+
+    return horizontalValue * suppression;
+}
+
 // Aplica correção de orientação aos movimentos do mouse
-void applyOrientationCorrection(float pitch_movement, float roll_movement, float yaw_movement, 
+void applyOrientationCorrection(float pitch_movement, float roll_movement, float yaw_movement,
                                float* corrected_horizontal, float* corrected_vertical) {
-    
+
     const OrientationMapping& map = orientationMaps[lastStableOrientation];
-    
+
     // Aplicar fatores de rotação baseados na orientação
     float temp_horizontal = pitch_movement * map.pitch_factor + yaw_movement * map.yaw_factor;
     float temp_vertical = roll_movement * map.roll_factor;
-    
+
+    // Reduzir influência de inclinações involuntárias do punho
+    temp_horizontal = suppressWristTilt(temp_horizontal, roll_movement, map);
+
     // Aplicar inversões se necessário
     *corrected_horizontal = map.invert_x ? -temp_horizontal : temp_horizontal;
     *corrected_vertical = map.invert_y ? -temp_vertical : temp_vertical;
