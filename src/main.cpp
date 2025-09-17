@@ -7,6 +7,8 @@
 
 /*
 
+ ---16set2025 - (Update para eliminar o Wrist Tilt. Ainda não foi testado)
+
  --- 31ago2025 - Daniel Flores (VERSÃO COM ORIENTAÇÃO AUTOMÁTICA + FILTROS AVANÇADOS)
  Aplicação: Movimento de Mouse e Teclado via MPU-6050 (Modo Laser Pointer)
  **V5 COMPLETA - ESP32 VERSION**
