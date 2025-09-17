@@ -37,11 +37,13 @@ const int SAMPLE_HZ = 100; // Freq. amostragem alvo
 
 // ---------------- MPU-6050 ----------------
 const uint8_t MPU_ADDR         = 0x68;
+const uint8_t MPU_WHO_AM_I_EXPECTED = 0x68;
 const uint8_t REG_CONFIG       = 0x1A; // DLPF
 const uint8_t REG_GYRO_CONFIG  = 0x1B;
 const uint8_t REG_ACCEL_CONFIG = 0x1C;
 const uint8_t REG_ACCEL_XOUT_H = 0x3B;
 const uint8_t REG_PWR_MGMT_1   = 0x6B;
+const uint8_t REG_WHO_AM_I     = 0x75;
 
 const float ACCEL_SENSITIVITY = 16384.0f; // ±2g
 const float GYRO_SENSITIVITY  = 131.0f;   // ±250 dps
@@ -326,11 +328,11 @@ void applyOrientationCorrection(float pitch_movement, float roll_movement, float
 }
 
 // ---------------- I2C helpers ----------------
-void mpuWrite(uint8_t reg, uint8_t data) {
+bool mpuWrite(uint8_t reg, uint8_t data) {
     Wire.beginTransmission(MPU_ADDR);
     Wire.write(reg);
     Wire.write(data);
-    Wire.endTransmission(true);
+    return Wire.endTransmission(true) == 0;
 }
 
 bool safeMpuRead(uint8_t reg, uint8_t n, uint8_t* buf) {
@@ -340,7 +342,8 @@ bool safeMpuRead(uint8_t reg, uint8_t n, uint8_t* buf) {
         return false;
     }
 
-    if (Wire.requestFrom(MPU_ADDR, n, true) != n) {
+    size_t bytesRead = Wire.requestFrom(static_cast<uint8_t>(MPU_ADDR), static_cast<size_t>(n), true);
+    if (bytesRead != n) {
         return false;
     }
 
@@ -348,19 +351,60 @@ bool safeMpuRead(uint8_t reg, uint8_t n, uint8_t* buf) {
     return true;
 }
 
-void setupMPU() {
-    mpuWrite(REG_PWR_MGMT_1, 0x00);   // Tira do modo sleep
-    mpuWrite(REG_CONFIG, 0x03);       // Define DLPF para 42Hz (Gyro)
-    mpuWrite(REG_ACCEL_CONFIG, 0x00); // Acelerômetro em ±2g
-    mpuWrite(REG_GYRO_CONFIG,  0x00); // Giroscópio em ±250 dps
+bool setupMPU() {
+    if (!mpuWrite(REG_PWR_MGMT_1, 0x00)) {   // Tira do modo sleep
+        return false;
+    }
+    if (!mpuWrite(REG_CONFIG, 0x03)) {       // Define DLPF para 42Hz (Gyro)
+        return false;
+    }
+    if (!mpuWrite(REG_ACCEL_CONFIG, 0x00)) { // Acelerômetro em ±2g
+        return false;
+    }
+    if (!mpuWrite(REG_GYRO_CONFIG,  0x00)) { // Giroscópio em ±250 dps
+        return false;
+    }
+    return true;
 }
 
-void recoverFromI2CFailure() {
+bool recoverFromI2CFailure() {
     Serial.println("I:RECUPERANDO_I2C");
     Wire.end();
     delay(50);
     Wire.begin(SDA_PIN, SCL_PIN);  // ESP32 specific I2C initialization
-    setupMPU();
+    delay(10);
+
+    for (uint8_t attempt = 0; attempt < 3; ++attempt) {
+        if (setupMPU()) {
+            uint8_t who = 0;
+            if (safeMpuRead(REG_WHO_AM_I, 1, &who) && who == MPU_WHO_AM_I_EXPECTED) {
+                return true;
+            }
+        }
+        delay(100);
+    }
+
+    Serial.println("E4:RECUPERACAO_I2C_FALHOU");
+    return false;
+}
+
+bool waitForMPU(uint32_t timeout_ms) {
+    unsigned long start = millis();
+    do {
+        Wire.beginTransmission(MPU_ADDR);
+        if (Wire.endTransmission(true) == 0) {
+            uint8_t who = 0;
+            if (safeMpuRead(REG_WHO_AM_I, 1, &who) && who == MPU_WHO_AM_I_EXPECTED) {
+                return true;
+            }
+        } else {
+            Serial.println("E1:MPU_NAO_ENCONTRADO. Tentando recuperar...");
+            recoverFromI2CFailure();
+        }
+        delay(200);
+    } while (millis() - start < timeout_ms);
+
+    return false;
 }
 
 void calibrateGyro(uint16_t samples = 800) {
@@ -371,7 +415,9 @@ void calibrateGyro(uint16_t samples = 800) {
     for (uint16_t i = 0; i < samples; i++) {
         if (!safeMpuRead(REG_ACCEL_XOUT_H, 14, buf)) {
             Serial.println("E2:LEITURA_FALHOU (calibracao)");
-            recoverFromI2CFailure();
+            if (!recoverFromI2CFailure()) {
+                Serial.println("E5:RECUPERACAO_FALHOU (calibracao)");
+            }
             i = 0;
             sum_gx = 0;
             sum_gy = 0;
@@ -432,15 +478,21 @@ void setup() {
     Serial.print("  BUTTON: GPIO "); Serial.println(BUTTON_PIN);
     Serial.println("Procurando MPU-6050...");
     
-    Wire.beginTransmission(MPU_ADDR);
-    while (Wire.endTransmission(true) != 0) {
-        Serial.println("E1:MPU_NAO_ENCONTRADO. Tentando novamente em 2s...");
+    while (!waitForMPU(2000)) {
+        Serial.println("E1:MPU_NAO_RESPONDE. Verifique conexoes e alimentacao.");
         delay(2000);
-        Wire.beginTransmission(MPU_ADDR);
     }
     Serial.println("MPU-6050 encontrado!");
 
-    setupMPU();
+    if (!setupMPU()) {
+        Serial.println("E4:CONFIG_INICIAL_FALHOU. Tentando recuperar...");
+        if (!recoverFromI2CFailure()) {
+            Serial.println("E4:CONFIG_NAO_RECUPERADA. Reinicie o dispositivo.");
+            while (true) {
+                delay(1000);
+            }
+        }
+    }
     delay(100);
 
     calibrateGyro();
@@ -460,7 +512,9 @@ void loop() {
     uint8_t buf[14];
     if (!safeMpuRead(REG_ACCEL_XOUT_H, 14, buf)) {
         Serial.println("E2:LEITURA_FALHOU");
-        recoverFromI2CFailure();
+        if (!recoverFromI2CFailure()) {
+            Serial.println("E5:RECUPERACAO_FALHOU");
+        }
         return;
     }
 
