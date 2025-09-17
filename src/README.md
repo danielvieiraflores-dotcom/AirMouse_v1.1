@@ -1,33 +1,73 @@
-# MPU6050 and ESP32 Connections
+# AirMouse ESP32 + MPU-6050
 
-This document outlines the hardware connections required to interface the MPU6050 accelerometer and gyroscope module with an ESP32 microcontroller.
+Este projeto transforma um ESP32 com o módulo MPU-6050 em um mouse aéreo com filtros avançados e detecção automática de orientação. O firmware lê dados do giroscópio/acelerômetro, aplica uma cadeia de filtros para suavizar o movimento e envia os valores normalizados pela porta serial. Um script Python no computador (`gyro_mouseCOMbotao.py`) traduz essas mensagens em comandos reais de mouse.
 
-## I2C Communication
+## Requisitos
 
-The project utilizes the I2C communication protocol to read data from the MPU6050. The default I2C pins on the ESP32 are used.
+### Hardware
+- ESP32 com comunicação I2C nos pinos GPIO 21 (SDA) e GPIO 22 (SCL).
+- Módulo MPU-6050 (GY-521).
+- Botão tátil ligado ao GPIO 15 para clique (utiliza o resistor de pull-up interno).
+- Cabos jumper e alimentação estável de 3,3 V para o sensor.
 
-### Required Connections:
+### Software
+- [PlatformIO](https://platformio.org/) ou Arduino IDE para compilar e gravar o firmware.
+- Python 3 com as dependências do script `gyro_mouseCOMbotao.py` para mapear os dados seriais em eventos de mouse.
 
-| MPU6050 Pin | ESP32 Pin | Purpose          |
-|-------------|-----------|------------------|
-| VCC         | 3.3V      | Power Supply     |
-| GND         | GND       | Ground           |
-| SCL         | GPIO 22   | I2C Clock Line   |
-| SDA         | GPIO 21   | I2C Data Line    |
+## Ligações de Hardware
 
-**Note:** Ensure that the voltage supplied to the MPU6050 is 3.3V, as the ESP32 operates at this voltage level.
+O projeto utiliza I2C para conversar com o MPU-6050. Utilize a pinagem padrão do ESP32.
 
-## Button
+| MPU6050 Pin | ESP32 Pin | Finalidade         |
+|-------------|-----------|--------------------|
+| VCC         | 3.3V      | Alimentação        |
+| GND         | GND       | Referência comum   |
+| SCL         | GPIO 22   | Clock do barramento|
+| SDA         | GPIO 21   | Dados do barramento|
 
-A push button can be connected for user input. 
+### Botão
 
-### Connection:
+- Conecte um terminal ao GND e o outro ao GPIO 15.
+- O pino é configurado como `INPUT_PULLUP` pelo firmware, dispensando resistores externos.
 
-| Component     | Connection            | ESP32 Pin |
-|---------------|-----------------------|-----------|
-| Push Button   | One side to GND       |           |
-|               | Other side to GPIO 15 | GPIO 15   |
+## Como o firmware funciona
 
-### Resistor:
+- Frequência alvo de amostragem: 100 Hz para leituras consistentes do sensor.
+- Calibração automática do giroscópio em dois momentos:
+  - Na inicialização (com o dispositivo parado).
+  - Automaticamente sempre que detectar repouso por mais de 2 segundos.
+- Recuperação automática da comunicação I2C em caso de falhas.
+- Cadeia de filtros para suavizar o movimento:
+  - Dead zone inteligente com transição suave.
+  - Sensibilidade adaptativa com três zonas (precisão, normal e rápida).
+  - Limitação de “jerk” para evitar saltos bruscos.
+  - Filtro de suavização exponencial com fator ajustado (`SMOOTHING_ALPHA`).
+- Detecção automática de orientação (horizontal, vertical, invertida, esquerda e direita) com temporização para evitar falsos positivos.
+- Supressão de inclinação involuntária do punho para manter o movimento horizontal estável.
+- Leitura do estado do botão no GPIO 15 para enviar cliques ao computador.
 
-The ESP32's internal pull-up resistor should be enabled for the button pin. This is done in the code by setting the pin mode to `INPUT_PULLUP`. This means no external pull-up or pull-down resistor is required.
+## Saídas seriais
+
+O firmware publica mensagens no formato:
+
+```
+X:<valor> Y:<valor> B:<0 ou 1>
+```
+
+- `X` e `Y` representam os deslocamentos processados do mouse.
+- `B` indica o estado do botão (1 = pressionado, 0 = solto).
+- Mensagens informativas adicionais iniciam com `I:` (por exemplo, `I:ORIENTACAO_HORIZONTAL` ou `I:RECUPERANDO_I2C`) e auxiliam no debug.
+
+## Fluxo de uso
+
+1. Monte o hardware e conecte o ESP32 ao computador.
+2. Carregue o firmware com PlatformIO ou Arduino IDE.
+3. Abra um monitor serial a 115200 bps para confirmar as mensagens de inicialização e garantir que a calibração foi concluída com o dispositivo parado.
+4. Execute `gyro_mouseCOMbotao.py` para transformar os dados seriais em movimentos reais do mouse.
+5. Teste os diferentes modos de orientação segurando o dispositivo em posições distintas.
+
+## Dicas de operação
+
+- Mantenha o sensor imóvel durante a calibração inicial e sempre que desejar forçar uma nova calibração (deixe-o parado por alguns segundos).
+- Caso a comunicação I2C falhe, o firmware tentará reinicializar automaticamente; verifique cabeamento e alimentação.
+- Ajustes finos (sensibilidade, limiares de dead zone e intensidade dos filtros) podem ser feitos diretamente em `src/main.cpp` caso precise adequar o comportamento ao seu uso.
